@@ -1,0 +1,63 @@
+//@version = 6
+strategy("😾", overlay = false,
+     initial_capital = 10000, currency = currency.USD,
+     default_qty_type = strategy.fixed, default_qty_value = 1000,
+     pyramiding = 0, margin_long = 100, margin_short = 100,
+     commission_type = strategy.commission.percent, commission_value = 0,
+     slippage = 0, calc_on_every_tick = false,
+     calc_on_order_fills = false, process_orders_on_close = true,
+     use_bar_magnifier = true)
+
+fixedQty = input.float(1000, "Fixed position quantity (symbol units)", minval = 1, step = 1, group = "Position")
+rLen = input.int(14, "RSI length (close)", minval = 2, group = "RSI")
+longEntry = input.float(30, "Long entry: cross below", minval = 0.1, maxval = 99.9, group = "RSI")
+shortEntry = input.float(70, "Short entry: cross above", minval = 0.1, maxval = 99.9, group = "RSI")
+targetOffset = input.float(17, "RSI target distance from signal RSI", minval = 0.1, maxval = 99, step = 0.1, group = "RSI")
+
+if longEntry >= shortEntry
+    runtime.error("Long entry level must be below short entry level.")
+if targetOffset >= shortEntry or longEntry + targetOffset >= 100
+    runtime.error("Target distance must be below the short entry level and below 100 minus the long entry level.")
+
+inverseNextClose(float base, float gainAvg, float lossAvg, int n, float level) =>
+    float result = na
+    if not na(gainAvg) and not na(lossAvg) and gainAvg >= 0 and lossAvg >= 0 and gainAvg + lossAvg > 0 and level > 0 and level < 100
+        float ratio = level / (100.0 - level)
+        float positiveDelta = (n - 1) * (ratio * lossAvg - gainAvg)
+        float delta = positiveDelta >= 0 ? positiveDelta : (n - 1) * (lossAvg - gainAvg / ratio)
+        result := base + delta
+    result
+
+priceChange = ta.change(close)
+gainAvg = ta.rma(math.max(priceChange, 0.0), rLen)
+lossAvg = ta.rma(math.max(-priceChange, 0.0), rLen)
+r = ta.rsi(close, rLen)
+crossLong = ta.crossunder(r, longEntry)
+crossShort = ta.crossover(r, shortEntry)
+longTargetRSI = r + targetOffset
+shortTargetRSI = r - targetOffset
+longTargetPrice = inverseNextClose(close, gainAvg, lossAvg, rLen, longTargetRSI)
+shortTargetPrice = inverseNextClose(close, gainAvg, lossAvg, rLen, shortTargetRSI)
+
+canEnter = barstate.isconfirmed and strategy.position_size == 0 and strategy.equity > 0
+
+if canEnter
+    if crossLong and not na(longTargetPrice)
+        float tp = math.round_to_mintick(longTargetPrice)
+        float distance = tp - close
+        float sl = math.round_to_mintick(close - distance)
+        if distance >= syminfo.mintick and sl >= syminfo.mintick
+            strategy.entry("Long", strategy.long, qty = fixedQty)
+            strategy.exit("Long SL/TP", from_entry = "Long", stop = sl, limit = tp)
+    else if crossShort and not na(shortTargetPrice)
+        float tp = math.round_to_mintick(shortTargetPrice)
+        float distance = close - tp
+        float sl = math.round_to_mintick(close + distance)
+        if distance >= syminfo.mintick and tp >= syminfo.mintick
+            strategy.entry("Short", strategy.short, qty = fixedQty)
+            strategy.exit("Short SL/TP", from_entry = "Short", stop = sl, limit = tp)
+
+plot(r, "RSI", color = color.purple, linewidth = 2)
+hi = hline(shortEntry, "Overbought", color = color.red)
+lo = hline(longEntry, "Oversold", color = color.green)
+fill(hi, lo, color = color.new(color.purple, 93))
